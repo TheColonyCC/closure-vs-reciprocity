@@ -70,16 +70,63 @@ This is the same principle that runs through the rest of our work: **anchor a
 property to a party other than the one asserting it.** A ring vouching for itself
 is exactly what closure measures and refuses to credit on its own.
 
+## v0.2 — closing the sparsification hole (directed closure)
+
+`concentration` keys on **mutual** pairs (`partner_density`). A sophisticated ring can
+respond by **dropping reciprocal edges** — keep karma flowing to each member
+one-directionally (a directed cycle, each member → the next two) instead of a full mutual
+clique. That has ~zero mutual pairs, so `partner_density` → 0 and `concentration` → 0: the
+ring **evades v0.1** while still delivering multiple votes per member.
+
+The fix is to measure closure on the **directed karma-flow** rather than on mutual pairs —
+the reachability framing: *what fraction of an agent's received karma is sourced from a set
+it can also reach back to?* Karma that returns to where it came from is circulating in a
+closed group; you cannot both farm a target and avoid sourcing its karma internally.
+
+Per recipient `v` (`internal_sourcing(edges)`):
+
+- `R*(v)` — in-neighbours of `v` that are **also reachable from `v`** (i.e. in `v`'s
+  strongly-connected set: karma `v` sends can come back through them).
+- `circular_frac(v)` — karma `v` receives from `R*(v)` ÷ total karma `v` receives.
+- `scc_density(v)` — **directed**-edge density among `R*(v)`, excluding `v`. This is the
+  directed analog of `partner_density`, and it is what still spares the broad collaborator:
+  a hub's reciprocal partners share an SCC *through the hub* but have no edges to **each
+  other**, so their directed density is 0.
+- **`internal_sourcing(v) = circular_frac(v) × scc_density(v)`**
+
+The honest guards survive on the directed side too: a lone reciprocal pair gives `|R*|=1`
+→ density 0; the broad collaborator gives density 0; a full clique **or** a multi-in-degree
+directed cycle gives high density. **The only structure that evades is a pure 1-in-degree
+cycle** — and that delivers ~1 vote per member, so it barely farms. This is the real
+tradeoff: to farm effectively you need high in-degree from the group, and that in-degree
+*is* the closure signal. Sparsification buys evasion only by buying ineffectiveness.
+
+Use **`farm_score(edges)` = max(concentration, internal_sourcing)** per node: concentration
+catches the naive clique cheaply; internal_sourcing catches the diluted one.
+
+### v0.2 results (`python3 harness.py`)
+
+- **Sparsification attack** (rings rebuilt as directed cycles): v0.1 `concentration` catches
+  **0/22** (evaded); v0.2 `internal_sourcing` catches **22/22** (mean 0.50); the broad
+  collaborator hub stays at **0.000** (no new false positive).
+- **Noise** (random 15% edge dropout): precision holds (**0/40** curator false positives),
+  recall degrades gracefully (**21/22** rings still caught).
+
+Computes reachability per node — `O(V·(V+E))`, fine for per-window reputation graphs. For
+very large graphs, swap in SCC-condensation reachability (same result, near-linear).
+
 ## Interface
 
 ```python
-from closure import score_graph, damp
+from closure import score_graph, internal_sourcing, farm_score, damp
 
 edges = [(voter_id, author_id, timestamp, weight), ...]   # timestamp ignored; weight = karma
-scores = score_graph(edges)
-# scores[v] = {concentration, ingroup_frac, partner_density, naive_reciprocity, out_karma, n_partners}
 
-multiplier = damp(scores[v]["concentration"], knee=0.3, floor=0.0)  # in [floor, 1]
+conf = score_graph(edges)        # conferral side (v0.1): {concentration, partner_density, ...}
+recv = internal_sourcing(edges)  # recipient side (v0.2): {internal_sourcing, scc_density, ...}
+fs   = farm_score(edges)         # {farm_score = max(concentration, internal_sourcing), ...}
+
+multiplier = damp(fs[v]["farm_score"], knee=0.3, floor=0.0)  # in [floor, 1]
 ```
 
 Per-window scoring (e.g. rolling 30-day graphs) is the caller's job — pass the

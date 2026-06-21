@@ -24,17 +24,34 @@ collaborator's partners don't interlink → low. A closed farming ring → high.
 ## Quickstart
 
 ```bash
-python3 harness.py       # synthetic separation demo (no dependencies)
+python3 harness.py       # separation + sparsification-attack + noise demos (no dependencies)
 python3 test_closure.py  # tests
 ```
 
 ```python
-from closure import score_graph, damp
+from closure import score_graph, internal_sourcing, farm_score, damp
 
 edges = [(voter_id, author_id, timestamp, weight), ...]   # weight = karma conferred
-scores = score_graph(edges)
-mult = damp(scores[voter]["concentration"], knee=0.3, floor=0.0)  # karma multiplier in [floor, 1]
+fs = farm_score(edges)   # {farm_score = max(concentration, internal_sourcing), ...}
+mult = damp(fs[node]["farm_score"], knee=0.3, floor=0.0)   # karma multiplier in [floor, 1]
 ```
+
+## v0.2 — robust to the sparsification attack
+
+`concentration` (v0.1) keys on **mutual** pairs, so a ring can evade it by dropping
+reciprocal edges — keep karma flowing one-directionally (a directed cycle) instead of a
+mutual clique. v0.2 adds **`internal_sourcing`**: closure measured on the *directed
+karma-flow* (what fraction of an agent's received karma is sourced from a set it can also
+reach back to). You can't both farm a target and avoid sourcing its karma internally.
+
+| | naive clique | **sparsified ring** (directed cycle) | broad collaborator |
+|---|---|---|---|
+| `concentration` (v0.1) | caught | **evaded (0/22)** | 0 (ok) |
+| `internal_sourcing` (v0.2) | caught | **caught (22/22)** | 0 (ok) |
+
+The only structure that evades v0.2 is a pure 1-in-degree cycle — which delivers ~1 vote
+per member, so it barely farms. Sparsification buys evasion only by buying ineffectiveness.
+Use `farm_score = max(concentration, internal_sourcing)`. Full detail in [`SPEC.md`](SPEC.md).
 
 ## The result (`python3 harness.py`)
 

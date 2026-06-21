@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for the closure-vs-reciprocity scorer. Pure stdlib; run: python3 test_closure.py"""
-from closure import score_graph, damp
-from harness import summarize
+from closure import score_graph, damp, internal_sourcing, farm_score
+from harness import summarize, attack_demo, noise_robustness
 
 
 def test_lone_mutual_pair_not_flagged():
@@ -65,6 +65,53 @@ def test_synthetic_separation():
           f"{r['fp_curator']} curator FPs, {r['fp_community']} community flags (honest limit)")
 
 
+def test_internal_sourcing_lone_pair_and_broad_collaborator():
+    # lone mutual pair -> |R*|=1 -> 0
+    edges = [("a", "b", 0, 1), ("b", "a", 0, 1)]
+    s = internal_sourcing(edges)
+    assert s["a"]["internal_sourcing"] == 0.0 and s["b"]["internal_sourcing"] == 0.0
+    # broad collaborator star: partners share an SCC via the hub but have no edges to each
+    # other -> scc_density 0 -> hub not flagged on the recipient side either
+    edges = []
+    for p in ["p1", "p2", "p3", "p4"]:
+        edges += [("hub", p, 0, 1), (p, "hub", 0, 1)]
+    s = internal_sourcing(edges)
+    assert s["hub"]["n_ring"] == 4
+    assert s["hub"]["scc_density"] == 0.0
+    assert s["hub"]["internal_sourcing"] == 0.0
+    print("ok: internal_sourcing -> 0 for lone pair and broad-collaborator hub")
+
+
+def test_sparsified_ring_evades_v1_but_caught_by_v2():
+    a = attack_demo()
+    # v0.1 concentration is evaded (no mutual pairs left)
+    assert a["ring_conc_mean"] < 0.10, a["ring_conc_mean"]
+    assert a["ring_caught_v1"] == 0, a["ring_caught_v1"]
+    # v0.2 internal_sourcing holds
+    assert a["ring_caught_v2"] == a["n_rings"], (a["ring_caught_v2"], a["n_rings"])
+    assert a["hub_intsrc"] == 0.0, a["hub_intsrc"]   # no new false positive
+    print(f"ok: sparsification attack -> v0.1 caught {a['ring_caught_v1']}/{a['n_rings']}, "
+          f"v0.2 caught {a['ring_caught_v2']}/{a['n_rings']}, hub FP {a['hub_intsrc']}")
+
+
+def test_farm_score_combines_both():
+    # naive clique: caught by concentration; directed cycle: caught by internal_sourcing
+    clique = [(m, n, 0, 1) for m in ["c0", "c1", "c2", "c3"] for n in ["c0", "c1", "c2", "c3"] if m != n]
+    fs = farm_score(clique)
+    assert all(fs[m]["farm_score"] >= 0.5 for m in ["c0", "c1", "c2", "c3"])
+    print("ok: farm_score = max(concentration, internal_sourcing)")
+
+
+def test_noise_robustness():
+    n = noise_robustness(drop=0.15)
+    # precision stays perfect under noise; recall degrades only slightly (random dropout can
+    # push an occasional ring member just under the threshold — that's expected, not a break).
+    assert n["curator_fp"] == 0, n["curator_fp"]
+    assert n["ring_caught"] >= n["n_rings"] - 2, (n["ring_caught"], n["n_rings"])
+    print(f"ok: under 15% edge dropout -> rings {n['ring_caught']}/{n['n_rings']} caught, "
+          f"{n['curator_fp']} curator FPs (precision holds, recall degrades gracefully)")
+
+
 if __name__ == "__main__":
     test_lone_mutual_pair_not_flagged()
     test_closed_ring_flagged()
@@ -72,4 +119,8 @@ if __name__ == "__main__":
     test_self_votes_ignored()
     test_damp_curve()
     test_synthetic_separation()
+    test_internal_sourcing_lone_pair_and_broad_collaborator()
+    test_sparsified_ring_evades_v1_but_caught_by_v2()
+    test_farm_score_combines_both()
+    test_noise_robustness()
     print("\nall tests passed")

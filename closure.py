@@ -79,6 +79,107 @@ def score_graph(edges):
     return scores
 
 
+def _adjacency(edges):
+    """Returns (out_adj, in_adj, nodes). out_adj[v][u] = karma v->u; in_adj[u][v] = same."""
+    from collections import defaultdict
+    out = defaultdict(lambda: defaultdict(float))
+    inn = defaultdict(lambda: defaultdict(float))
+    nodes = set()
+    for v, a, _ts, w in edges:
+        if v == a:
+            continue
+        out[v][a] += float(w)
+        inn[a][v] += float(w)
+        nodes.add(v); nodes.add(a)
+    return out, inn, nodes
+
+
+def _reach(out_adj, src):
+    """Set of nodes reachable from src via directed karma edges (excludes src unless on a cycle)."""
+    seen = set()
+    stack = list(out_adj.get(src, ()))
+    while stack:
+        n = stack.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        stack.extend(out_adj.get(n, ()))
+    return seen
+
+
+def internal_sourcing(edges):
+    """Recipient-side, DIRECTED closure — robust to the mutual-edge sparsification attack
+    on `score_graph`'s partner_density.
+
+    A sophisticated ring can drop reciprocal edges (keep one-directional karma flow toward
+    each member) to suppress mutual-pair density while still farming. partner_density keys on
+    *mutual* pairs and is fooled. This measures closure on the directed karma-flow instead:
+    karma that circulates back to where it came from.
+
+    Per recipient v:
+      R*(v)            = in-neighbours of v that are also reachable FROM v (i.e. in v's
+                         strongly-connected set — karma v sends can return through them)
+      circular_frac(v) = karma v receives from R*(v) / total karma v receives
+      scc_density(v)   = directed-edge density among R*(v), EXCLUDING v (clique-ness of the
+                         circulating support, by directed edges — the directed analog of
+                         partner_density; this is what spares the hub-mediated broad
+                         collaborator, whose reciprocal partners have no edges to each other)
+      internal_sourcing(v) = circular_frac(v) * scc_density(v)
+
+    Returns {node: {internal_sourcing, circular_frac, scc_density, in_karma, n_ring}}.
+
+    Honest-case guards preserved: a lone reciprocal pair gives |R*|=1 -> scc_density 0; a
+    broad collaborator's reciprocal partners are all in one SCC (bridged by the focal node)
+    but have no edges among *each other* -> scc_density 0. A closed clique OR a multi-in-degree
+    directed cycle (the sparsified farm) -> scc_density high. The only structure that evades is
+    a pure 1-in-degree cycle, which delivers ~1 vote/member and so barely farms (see SPEC).
+
+    Note: computes reachability per node (O(V*(V+E))). Fine for per-window reputation graphs;
+    use SCC-condensation reachability if you scale to very large graphs.
+    """
+    out, inn, nodes = _adjacency(edges)
+    reach = {v: _reach(out, v) for v in nodes}
+    scores = {}
+    for v in nodes:
+        in_k = sum(inn[v].values())
+        if in_k <= 0:
+            scores[v] = {"internal_sourcing": 0.0, "circular_frac": 0.0,
+                         "scc_density": 0.0, "in_karma": 0.0, "n_ring": 0}
+            continue
+        # R*: in-neighbours v can also reach (same strongly-connected set)
+        Rstar = [u for u in inn[v] if u in reach[v]]
+        circ = sum(inn[v][u] for u in Rstar) / in_k
+        if len(Rstar) >= 2:
+            pairs = len(Rstar) * (len(Rstar) - 1)
+            diredges = sum(1 for i in Rstar for j in Rstar if i != j and out.get(i, {}).get(j, 0) > 0)
+            density = diredges / pairs
+        else:
+            density = 0.0
+        scores[v] = {
+            "internal_sourcing": round(circ * density, 4),
+            "circular_frac": round(circ, 4),
+            "scc_density": round(density, 4),
+            "in_karma": round(in_k, 1),
+            "n_ring": len(Rstar),
+        }
+    return scores
+
+
+def farm_score(edges):
+    """Combined per-node farm signal: max of the conferral-side concentration (cheap, catches
+    the naive clique) and the recipient-side internal_sourcing (catches the sparsified ring).
+    Returns {node: {farm_score, concentration, internal_sourcing}}."""
+    conf = score_graph(edges)
+    recv = internal_sourcing(edges)
+    nodes = set(conf) | set(recv)
+    out = {}
+    for v in nodes:
+        c = conf.get(v, {}).get("concentration", 0.0)
+        s = recv.get(v, {}).get("internal_sourcing", 0.0)
+        out[v] = {"farm_score": round(max(c, s), 4), "concentration": c, "internal_sourcing": s}
+    return out
+
+
 def damp(concentration, *, knee=0.3, floor=0.0):
     """Convert a concentration score into a karma-conferral multiplier in [floor, 1].
 
