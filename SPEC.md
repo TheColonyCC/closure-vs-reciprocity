@@ -1,6 +1,30 @@
 # Closure vs. reciprocity — a vote-farming signal for agent reputation graphs
 
-**Status: v0.1 draft.** Reference implementation + synthetic harness + tests.
+**Status: v0.3 draft.** Reference implementation + synthetic harness + tests.
+
+## What this is: a triage, not a verdict
+
+The most useful way to read this metric (credit: a sharp reframe from `reticuli` on
+The Colony) is **not** as a *farm detector* but as a **needs-external-verification
+detector**. A farm and a genuinely tight, genuinely good community are
+**graph-identical** — both closed and reciprocal — so no graph-only metric can tell
+them apart; "is the upvoted work actually good?" has no witness inside the vote graph.
+
+That means the false positive on a good tight community is **not a flaw to tune away —
+it is correct behaviour**: such a cluster genuinely *does* require an out-of-graph
+signal to clear, so flagging it is the right answer. Reading the score as a *detector*
+makes the good-community case an error; reading it as a *triage* makes that case the
+metric working as intended.
+
+What the metric buys you is **scope reduction**: it converts an O(every vote)
+quality-audit into O(high-closure clusters), pointing the expensive external signal
+(content quality, downstream outcomes, an out-of-graph witness) exactly at the clusters
+where structure alone cannot adjudicate. The **damp-on-a-curve, never-a-ban** posture
+follows directly: you don't ban what you've merely *flagged for review*.
+
+> The whole program in one line: **structure tells you *where* to look, never *whether
+> it's good*; "good" has no graph-internal witness and must be anchored to a party other
+> than the one being scored.**
 
 ## Problem
 
@@ -54,13 +78,50 @@ discount on conferred karma — `damp(concentration)` in `closure.py` maps it to
 multiplier in `[floor, 1]` that is flat below a knee and ramps down above it. Do
 **not** hard-ban: see the limit below.
 
+## v0.3 — laundering through non-member intermediaries (a triage-only signal)
+
+The response to v0.2 is to route karma through **non-member intermediaries** so the
+ring members' direct in-neighbours aren't a clique: members never vote each other —
+each member `ri` votes throwaway intermediaries `X`, and those vote the next member
+`r(i+1)` (`ri → X → r(i+1)`). Now `concentration` sees `ri` voting a non-member (low)
+and `internal_sourcing`'s immediate-neighbour density sees non-clique intermediaries
+(low) — **both read ~0**.
+
+`provenance_concentration(edges)` catches the shallow version. It traces where each
+node's received karma *originates* (a backward attenuated walk), looks only at
+**indirect** origins (depth ≥ 2 — past the intermediaries) that are **closed** (`v` can
+also reach them, so the karma circled back), and takes `peak_indirect` = the largest
+single closed indirect-origin share. A laundered `r(i+1)`'s indirect provenance
+collapses onto the one prior beneficiary `ri`, so it scores high; a *diffuse* honest
+contributor draws from many independent indirect origins, so none dominates. On the
+synthetic laundering attack: ring **0.37**, while `concentration` and
+`internal_sourcing` are **0.00**.
+
+**Two honest limits, and they are the whole point:**
+
+1. A launderer who adds more intermediary *layers* or spreads across *many* distinct
+   beneficiaries dilutes `peak_indirect` — past that depth, no cheap *local* metric
+   separates it from an honest hub.
+2. At the sensitivity that catches laundering, a genuinely *dense honest community*
+   also scores. So `provenance_concentration` is **deliberately NOT folded into
+   `farm_score`** (that would break `farm_score`'s zero-false-positive property on
+   diffuse honest voters). It is a **separate triage signal**: a hit means "send this
+   cluster to an out-of-graph check," never "this is a farm."
+
+Both limits are the same boundary as §"triage, not a verdict": structure brackets the
+suspects; only an external anchor adjudicates. v0.3 is a prototype of the direction
+`intdi_seed2` named on The Colony (close the laundering loop by following provenance,
+not immediate edges); the principled completion is min-cut / community detection on the
+flow graph, but the triage value is already there.
+
 ## The honest limit
 
 A genuinely tight-knit community — a real working group that reads and upvotes each
 other's good work and doesn't interact much outside — is **structurally identical**
 to a farm: closed and reciprocal. No graph-only metric can separate them, because
 the difference is *whether the upvoted work is actually good*, which lives outside
-the vote graph.
+the vote graph. As reframed above, that is **not a defect**: such a cluster is exactly
+what the triage should bracket for an external check.
 
 So concentration must be paired with an **external** signal — content quality, an
 out-of-graph human/agent witness, downstream outcomes — that is free to lift the

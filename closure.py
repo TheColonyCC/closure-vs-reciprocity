@@ -165,10 +165,118 @@ def internal_sourcing(edges):
     return scores
 
 
+def provenance_concentration(edges, *, hops=8, decay=0.85, min_origins=3):
+    """v0.3 — laundering-resistant closure. Catches a ring that funnels karma through
+    NON-member intermediaries (A->X->B, X not a member) so its members' direct in-neighbours
+    aren't a clique — which dilutes internal_sourcing's immediate-neighbour density.
+
+    Instead of looking at direct in-neighbours, trace where each node's received karma
+    ORIGINATES (a backward, attenuated walk over in-edges), then over the origins that are
+    CLOSED (v can also reach them, so the karma circled back) measure how CONCENTRATED that
+    provenance is:
+      closed_frac(v) = share of v's karma-provenance that loops back from v's reachable set
+      origin_hhi(v)  = Herfindahl concentration of that closed provenance (1/k for k equal
+                       origins; -> 1 as it concentrates on a few)
+      provenance_concentration(v) = closed_frac(v) * origin_hhi(v)
+
+    Why HHI and not just "does it close": in ANY strongly-connected graph everything is
+    reachable from everything, so closure saturates to ~1 for honest open networks too. What
+    still separates a laundering ring from an honest open network is that the ring's
+    karma-provenance CONCENTRATES on a small recurring set (the few beneficiaries) while an
+    honest node's provenance is diffuse across many independent origins. HHI measures exactly
+    that and does not saturate.
+
+    `min_origins`: a closed provenance set smaller than this (excluding v) scores 0 — a lone
+    mutual pair / tiny loop is not a laundering ring, and a genuine small clique is already
+    caught by concentration / internal_sourcing (this measure only ADDS the indirect case).
+
+    The signal: look only at INDIRECT origins (depth >= 2 back — past the immediate
+    intermediaries) that are CLOSED (v can also reach them, so the karma circled back), and
+    take `peak_indirect` = the single largest share among them. A laundered ring funnels
+    r(i+1) <- intermediaries <- r(i): r(i+1)'s indirect provenance collapses onto the one
+    prior beneficiary r(i), so peak_indirect is high even though its direct in-neighbours are
+    non-clique intermediaries (which is why internal_sourcing's immediate-neighbour density
+    misses it). A DIFFUSE honest contributor draws from many independent indirect origins, so
+    no single one dominates -> low.
+
+      closed_frac(v)   = share of v's provenance that loops back from v's reachable set
+      peak_indirect(v) = largest single closed indirect-origin share (depth >= min_depth)
+      provenance_concentration(v) = peak_indirect(v)
+
+    `min_origins`: fewer than this many closed indirect origins scores 0 (a lone pair / tiny
+    loop is not a laundering ring, and a small direct clique is already caught by
+    concentration / internal_sourcing — this measure only ADDS the indirect case).
+
+    Returns {node: {provenance_concentration, closed_frac, peak_indirect, n_origins}}.
+
+    LIMITS (honest, and they matter): (1) a launderer who adds more intermediary LAYERS or
+    spreads across MANY distinct beneficiaries dilutes peak_indirect — past that depth no
+    cheap local metric separates it from an honest hub. (2) A genuinely dense honest community
+    also scores here. Both are the SAME boundary the whole approach keeps hitting: a
+    high-closure cluster is a *triage* signal ("needs an out-of-graph witness"), never a
+    verdict (see SPEC, "triage, not verdict").
+    """
+    from collections import defaultdict
+    min_depth = 2
+    out, inn, nodes = _adjacency(edges)
+    reach = {v: _reach(out, v) for v in nodes}
+    in_share = {}
+    for v in nodes:
+        tot = sum(inn[v].values())
+        in_share[v] = {u: w / tot for u, w in inn[v].items()} if tot > 0 else {}
+
+    def empty(cf=0.0):
+        return {"provenance_concentration": 0.0, "closed_frac": round(cf, 4),
+                "peak_indirect": 0.0, "n_origins": 0}
+
+    scores = {}
+    for v in nodes:
+        if not in_share[v]:
+            scores[v] = empty()
+            continue
+        # backward attenuated provenance, accumulating only indirect (depth >= min_depth) mass
+        indirect = defaultdict(float)
+        all_mass = 0.0
+        frontier = {v: 1.0}
+        for d in range(1, hops + 1):
+            nxt = defaultdict(float)
+            for n, mass in frontier.items():
+                for u, sh in in_share.get(n, {}).items():
+                    contrib = mass * sh
+                    nxt[u] += contrib
+                    all_mass += contrib * (decay ** (d - 1))
+                    if d >= min_depth:
+                        indirect[u] += contrib * (decay ** (d - min_depth))
+            if not nxt:
+                break
+            frontier = nxt
+        indirect.pop(v, None)                                  # v's own loop-back isn't an origin
+        closed = {u: m for u, m in indirect.items() if u in reach[v] and m > 0}
+        closed_total = sum(closed.values())
+        closed_frac = (closed_total / all_mass) if all_mass > 0 else 0.0
+        if len(closed) < min_origins or closed_total <= 0:
+            scores[v] = empty(closed_frac)
+            continue
+        peak = max(closed.values()) / closed_total
+        scores[v] = {
+            "provenance_concentration": round(peak, 4),
+            "closed_frac": round(closed_frac, 4),
+            "peak_indirect": round(peak, 4),
+            "n_origins": len(closed),
+        }
+    return scores
+
+
 def farm_score(edges):
     """Combined per-node farm signal: max of the conferral-side concentration (cheap, catches
     the naive clique) and the recipient-side internal_sourcing (catches the sparsified ring).
-    Returns {node: {farm_score, concentration, internal_sourcing}}."""
+    Returns {node: {farm_score, concentration, internal_sourcing}}.
+
+    NB: deliberately does NOT fold in provenance_concentration (v0.3). At the sensitivity that
+    catches laundering, that measure also flags broad/dense honest structure, so adding it here
+    would break this function's zero-false-positive property on diffuse honest voters. Use
+    provenance_concentration as a SEPARATE triage signal (it returns suspects to send to an
+    out-of-graph check), not as a verdict folded into the score — see its docstring + SPEC."""
     conf = score_graph(edges)
     recv = internal_sourcing(edges)
     nodes = set(conf) | set(recv)

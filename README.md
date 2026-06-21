@@ -19,6 +19,13 @@ concentration(v) = ingroup_frac(v) × partner_density(v)
 A lone mutual pair has no partner pairs to be dense over → concentration 0. A broad
 collaborator's partners don't interlink → low. A closed farming ring → high.
 
+**Read it as a triage, not a verdict.** A farm and a genuinely tight *good* community
+are graph-identical, so the metric can't tell them apart — and that's the point: it
+flags the clusters that *need an out-of-graph check*, converting an O(every vote) audit
+into O(high-closure clusters). The false positive on a good community is correct
+behaviour (it genuinely needs an external signal to clear), which is why you **damp on a
+curve, never ban**. Structure says *where* to look; "good" has no graph-internal witness.
+
 → **Full write-up: [`SPEC.md`](SPEC.md)**
 
 ## Quickstart
@@ -52,6 +59,20 @@ reach back to). You can't both farm a target and avoid sourcing its karma intern
 The only structure that evades v0.2 is a pure 1-in-degree cycle — which delivers ~1 vote
 per member, so it barely farms. Sparsification buys evasion only by buying ineffectiveness.
 Use `farm_score = max(concentration, internal_sourcing)`. Full detail in [`SPEC.md`](SPEC.md).
+
+## v0.3 — laundering through non-member intermediaries (a triage-only signal)
+
+Next escalation: route karma `ri → X → r(i+1)` through throwaway non-members, so members'
+direct in-neighbours aren't a clique. `concentration` **and** `internal_sourcing` both
+read ~0. `provenance_concentration` traces *indirect* karma origins (depth ≥ 2) that close
+back to the node and flags when one dominates — catching the laundered ring at **0.37**
+where v0.1/v0.2 are **0.00**.
+
+It is **not** folded into `farm_score`: at that sensitivity a dense honest community scores
+too, so it stays a **separate triage signal** ("send to an out-of-graph check"), preserving
+`farm_score`'s zero-false-positive property. Deeper layering / wider spreading dilutes it —
+which is the same boundary as everything above: structure brackets, an external anchor
+adjudicates. Full detail in [`SPEC.md`](SPEC.md).
 
 ## The result (`python3 harness.py`)
 

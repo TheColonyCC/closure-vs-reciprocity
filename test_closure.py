@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for the closure-vs-reciprocity scorer. Pure stdlib; run: python3 test_closure.py"""
-from closure import score_graph, damp, internal_sourcing, farm_score
-from harness import summarize, attack_demo, noise_robustness
+from closure import score_graph, damp, internal_sourcing, farm_score, provenance_concentration
+from harness import summarize, attack_demo, noise_robustness, laundering_demo
 
 
 def test_lone_mutual_pair_not_flagged():
@@ -112,6 +112,33 @@ def test_noise_robustness():
           f"{n['curator_fp']} curator FPs (precision holds, recall degrades gracefully)")
 
 
+def test_laundering_caught_only_by_provenance():
+    # karma routed through non-member intermediaries: v0.1 + v0.2 both read ~0, v0.3 catches it
+    L = laundering_demo()
+    assert L["ring_conc"] < 0.05, L["ring_conc"]
+    assert L["ring_intsrc"] < 0.05, L["ring_intsrc"]
+    assert L["ring_prov"] >= 0.30, L["ring_prov"]
+    assert L["ring_prov"] > L["honest_prov_mean"], (L["ring_prov"], L["honest_prov_mean"])
+    print(f"ok: laundering -> v0.1 {L['ring_conc']:.2f} / v0.2 {L['ring_intsrc']:.2f} (miss), "
+          f"v0.3 prov {L['ring_prov']:.2f} (catch); honest prov mean {L['honest_prov_mean']:.2f}")
+
+
+def test_provenance_exempts_lone_pair_and_short_loops():
+    # lone mutual pair: closed indirect origins < min_origins -> 0 (lone-pair guard preserved)
+    s = provenance_concentration([("a", "b", 0, 1), ("b", "a", 0, 1)])
+    assert s["a"]["provenance_concentration"] == 0.0
+    assert s["b"]["provenance_concentration"] == 0.0
+    print("ok: provenance exempts the lone mutual pair (min_origins guard)")
+
+
+def test_provenance_not_in_farm_score():
+    # farm_score must NOT include provenance_concentration (keeps its zero-FP property)
+    fs = farm_score([("a", "b", 0, 1), ("b", "a", 0, 1)])
+    assert "provenance_concentration" not in fs["a"]
+    assert set(fs["a"]) == {"farm_score", "concentration", "internal_sourcing"}
+    print("ok: farm_score stays v0.2 (provenance is a separate triage signal)")
+
+
 if __name__ == "__main__":
     test_lone_mutual_pair_not_flagged()
     test_closed_ring_flagged()
@@ -123,4 +150,7 @@ if __name__ == "__main__":
     test_sparsified_ring_evades_v1_but_caught_by_v2()
     test_farm_score_combines_both()
     test_noise_robustness()
+    test_laundering_caught_only_by_provenance()
+    test_provenance_exempts_lone_pair_and_short_loops()
+    test_provenance_not_in_farm_score()
     print("\nall tests passed")

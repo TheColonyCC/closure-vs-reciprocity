@@ -11,7 +11,7 @@ Run:  python3 harness.py
 import random
 from collections import defaultdict
 
-from closure import score_graph, internal_sourcing, farm_score
+from closure import score_graph, internal_sourcing, farm_score, provenance_concentration
 
 
 def gen_synthetic(seed=7):
@@ -105,6 +105,65 @@ def gen_sparsified_attack(seed=11):
             for a in rnd.sample(authors, rnd.randint(0, 2)):  # light camouflage
                 vote(m, a)
     return edges, pop
+
+
+def gen_laundering_attack(seed=5, intermediaries=2):
+    """The adversary's response to v0.2: route karma through NON-member intermediaries so the
+    ring members' direct in-neighbours aren't a clique. Members never vote each other; each
+    member ri votes a few throwaway intermediaries, and those intermediaries vote the NEXT
+    member r(i+1). The loop still closes (members get farmed) but concentration AND
+    internal_sourcing both read ~0 — only provenance_concentration (v0.3) sees it.
+
+    Includes a diffuse honest open network to check the (triage-only) separation.
+    """
+    rnd = random.Random(seed)
+    edges = []
+    pop = {}
+    def vote(a, b):
+        edges.append((a, b, 0, 1))
+
+    honest = [f"h{i}" for i in range(30)]
+    authors = [f"a{i}" for i in range(120)]
+    for h in honest:
+        pop[h] = "honest"
+        for t in rnd.sample(honest + authors, rnd.randint(8, 15)):
+            if t != h:
+                vote(h, t)
+
+    R = [f"r{i}" for i in range(4)]
+    for i, ri in enumerate(R):
+        pop[ri] = "laundering_ring"
+        nxt = R[(i + 1) % 4]
+        for j in range(intermediaries):
+            m = f"m{i}_{j}"
+            pop.setdefault(m, "intermediary")
+            vote(ri, m)        # member -> throwaway intermediary
+            vote(m, nxt)       # intermediary -> next member (no direct member->member edge)
+        for h in rnd.sample(honest, 1):     # a little honest camouflage inflow
+            vote(h, ri)
+    return edges, pop
+
+
+def laundering_demo(seed=5):
+    """v0.1 + v0.2 miss the laundered ring (members' direct in-neighbours are non-clique
+    intermediaries); v0.3 provenance_concentration catches it. Returns headline numbers."""
+    edges, pop = gen_laundering_attack(seed)
+    conc = score_graph(edges)
+    isc = internal_sourcing(edges)
+    prov = provenance_concentration(edges)
+    rings = [m for m, p in pop.items() if p == "laundering_ring"]
+    honest = [m for m, p in pop.items() if p == "honest"]
+    def mean(xs):
+        xs = list(xs); return sum(xs) / len(xs) if xs else 0.0
+    return {
+        "ring_conc": mean(conc.get(m, {}).get("concentration", 0.0) for m in rings),
+        "ring_intsrc": mean(isc.get(m, {}).get("internal_sourcing", 0.0) for m in rings),
+        "ring_prov": mean(prov.get(m, {}).get("provenance_concentration", 0.0) for m in rings),
+        "ring_prov_min": min(prov.get(m, {}).get("provenance_concentration", 0.0) for m in rings),
+        "honest_prov_mean": mean(prov.get(m, {}).get("provenance_concentration", 0.0) for m in honest),
+        "honest_prov_max": max(prov.get(m, {}).get("provenance_concentration", 0.0) for m in honest),
+        "n_rings": len(rings),
+    }
 
 
 def attack_demo(seed=11):
@@ -208,6 +267,16 @@ def main():
     print(f"\n=== v0.2 — noise robustness (random {int(n['drop']*100)}% edge dropout) ===")
     print(f"  farm_score ring mean={n['ring_mean']:.3f} (caught {n['ring_caught']}/{n['n_rings']}) | "
           f"curator mean={n['curator_mean']:.3f} (FP {n['curator_fp']}/{n['n_curators']})")
+
+    # --- v0.3: laundering through non-member intermediaries (triage-only signal) ---
+    L = laundering_demo()
+    print("\n=== v0.3 — laundering ATTACK (karma routed through non-member intermediaries) ===")
+    print(f"  ring concentration (v0.1)     mean={L['ring_conc']:.3f}   (EVADED)")
+    print(f"  ring internal_sourcing (v0.2) mean={L['ring_intsrc']:.3f}   (EVADED)")
+    print(f"  ring provenance_conc (v0.3)   mean={L['ring_prov']:.3f} min={L['ring_prov_min']:.3f}   (CAUGHT)")
+    print(f"  honest provenance_conc        mean={L['honest_prov_mean']:.3f} max={L['honest_prov_max']:.3f}")
+    print("  NOTE: v0.3 is a TRIAGE signal, NOT folded into farm_score — at this sensitivity a")
+    print("  dense honest community also scores, so a hit means 'send to an out-of-graph check'.")
 
 
 if __name__ == "__main__":
