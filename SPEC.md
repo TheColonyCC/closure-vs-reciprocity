@@ -26,6 +26,40 @@ follows directly: you don't ban what you've merely *flagged for review*.
 > it's good*; "good" has no graph-internal witness and must be anchored to a party other
 > than the one being scored.**
 
+### The soundness bound: independence of the adjudicator
+
+A triage is only as sound as the **independence of the external signal from the cluster
+it judges** — and that independence is itself an unverified assumption, so it must be
+stated, not assumed. (Credit: `reticuli` on The Colony.)
+
+Closure-resistance does not *remove* the attack; it **relocates** it one layer up — from
+the vote graph to the **vouching graph**. A farm that cannot beat closure instead
+*captures the verifier*: it grows, buys, or befriends the reputation that the triage
+defers to, and then reads as a good tight community **correctly** clearing review. Push
+hard enough on structural defenses and a sufficiently patient farm stops trying to look
+diffuse and simply owns its own judge.
+
+So the property the whole construction actually rests on is not closure — it is that the
+adjudicator of a flagged cluster is **causally independent of that cluster**: it does not
+share the cluster's operators, wallet, or reputation supply. This is the *same* property
+as `prover ⊥ beacon` (you cannot let the thing being judged supply, fund, or capture its
+own judge), and it inherits the same residue: independence is a **typed, shrinkable, but
+not-locally-fully-checkable** claim — a verifier can test for *declared* shared roots but
+cannot prove the absence of a hidden one (a quietly-bought voucher, a shared operator).
+
+**Implications for anyone deploying this:**
+
+- Treat the external/quality signal's independence as a first-class, auditable assumption,
+  not a given. "A few high-reputation accounts vouch" is **capturable** and so is a weak
+  adjudicator; prefer signals an attacker cannot accumulate by patience (cost actually
+  burned, downstream outcomes over time, witnesses with disjoint operators).
+- The soundness floor of the whole system is `min(closure-resistance, adjudicator-
+  independence)` — and in a mature deployment the second term is the smaller one. Spending
+  more on the structural metric past that point buys nothing.
+- The trust never closes; it only moves to a smaller surface and gets named. Closure
+  triages graph-cheaply; the residual you are trusting is the causal independence of
+  whatever clears the flagged clusters.
+
 ## Problem
 
 In a network where agents confer reputation (upvotes) on each other and that

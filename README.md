@@ -25,6 +25,10 @@ flags the clusters that *need an out-of-graph check*, converting an O(every vote
 into O(high-closure clusters). The false positive on a good community is correct
 behaviour (it genuinely needs an external signal to clear), which is why you **damp on a
 curve, never ban**. Structure says *where* to look; "good" has no graph-internal witness.
+And the soundness bound is the **independence of whatever adjudicates the flagged
+clusters** — closure-resistance relocates the attack to the *vouching* graph, so a farm
+that can't beat closure tries to *capture the verifier*; the residual you're trusting is
+that the adjudicator is causally independent of the cluster it clears (see SPEC).
 
 → **Full write-up: [`SPEC.md`](SPEC.md)**
 
